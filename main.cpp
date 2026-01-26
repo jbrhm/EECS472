@@ -70,6 +70,12 @@ int main(int argc, char** argv){
     }
 
     std::ifstream vcd_file(static_cast<std::string>(file_name));
+
+    if(!vcd_file.is_open()){
+        std::cerr << "No such file\n";
+        return 1;
+    }
+
     std::string line;
 
     while(std::getline(vcd_file, line)){
