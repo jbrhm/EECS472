@@ -13,6 +13,42 @@
 #include <string>
 #include <cstring>
 #include <cmath>
+#include <charconv>
+
+using extracted_string = std::optional<std::string_view>;
+
+class FileExtractor{
+private:
+    std::string const& s;
+    std::string::const_iterator beg;
+    std::string::const_iterator end;
+
+public:
+    FileExtractor(std::string const& s_in) : s{s_in}, beg{s_in.begin()}, end{s_in.begin()}{}
+
+    [[nodiscard]] extracted_string extract_line(){
+        beg = end;
+        while(beg != s.end() && std::isspace(*beg)){
+            ++beg;
+        }
+
+        if(beg == s.end()){
+            return std::nullopt;
+        }
+
+        end = beg;
+
+        while(end != s.end() && !std::isspace(*end)){
+            ++end;
+        }
+
+        if(beg == end){
+            return std::nullopt;
+        }
+
+        return std::string_view(&(*beg), std::distance(beg, end));
+    }
+};
 
 struct VcdKeyword{
     std::string pattern;
@@ -32,37 +68,48 @@ private:
     std::size_t num_nibbles;
 
 public:
-    static std::unordered_map<std::string, Variable> var_map; // map from vcd
-    static std::unordered_map<std::string, std::string> rtl_to_vcd_names; // external names to internal names
-    static std::unordered_map<std::string, std::string> vcd_to_rtl_names; // external names to internal names
+    static std::map<std::string, Variable, std::less<void>> var_map; // map from vcd
+    static std::map<std::string, std::string, std::less<void>> rtl_to_vcd_names; // external names to internal names
+    static std::map<std::string, std::string, std::less<void>> vcd_to_rtl_names; // external names to internal names
     
-    static std::string binary_to_hex(std::string binary, std::size_t num_hex){
+    static std::string binary_to_hex(std::string_view binary, std::size_t num_hex){
         char const* hex_lut = "0123456789ABCDEF";
         assert(std::strlen(hex_lut) == 16);
 
         std::string output{};
+        output.reserve(num_hex);
         // handle the case where the size is not a multiple of four
         if(binary.length() % 4){
-            try{
-                std::string bin = binary.substr(0, binary.length() % 4);
-                std::size_t decimal = std::stoull(bin, nullptr, 2);
-                // assert(decimal < std::strlen(hex_lut));
+            std::size_t decimal;
+            std::from_chars_result res = std::from_chars(
+                binary.data(),
+                binary.data() + (binary.length() % 4),
+                decimal,
+                2
+            );
+
+            if (res.ec == std::errc{}) {
                 output.push_back(hex_lut[decimal]);
-            }catch(std::out_of_range const& e){
+            } else if (res.ec == std::errc::invalid_argument) {
                 output.push_back('x');
-            }catch(std::invalid_argument const& e){
+            } else if (res.ec == std::errc::result_out_of_range) {
                 output.push_back('x');
             }
         }
         for(std::size_t i = binary.length() % 4; (i + 4) <= binary.length(); i += 4){
-            try{
-                std::string bin = binary.substr(i, 4);
-                std::size_t decimal = std::stoull(bin, nullptr, 2);
-                // assert(decimal < std::strlen(hex_lut));
+            std::size_t decimal;
+            std::from_chars_result res = std::from_chars(
+                binary.data() + i,
+                binary.data() + i + 4,
+                decimal,
+                2
+            );
+
+            if (res.ec == std::errc{}) {
                 output.push_back(hex_lut[decimal]);
-            }catch(std::out_of_range const& e){
+            } else if (res.ec == std::errc::invalid_argument) {
                 output.push_back('x');
-            }catch(std::invalid_argument const& e){
+            } else if (res.ec == std::errc::result_out_of_range) {
                 output.push_back('x');
             }
         }
@@ -127,9 +174,9 @@ public:
         return value.size();
     }
 };
-std::unordered_map<std::string, Variable> Variable::var_map{};
-std::unordered_map<std::string, std::string> Variable::rtl_to_vcd_names{};
-std::unordered_map<std::string, std::string> Variable::vcd_to_rtl_names{};
+std::map<std::string, Variable, std::less<void>> Variable::var_map{};
+std::map<std::string, std::string, std::less<void>> Variable::rtl_to_vcd_names{};
+std::map<std::string, std::string, std::less<void>> Variable::vcd_to_rtl_names{};
 
 char const* const shortopts = "v:hc:";
 
@@ -286,23 +333,38 @@ int main(int argc, char** argv){
     std::string line{};
     std::size_t curr_timestamp = 0;
     while(std::getline(vcd_file, line)){
-        std::stringstream line_stream(line);
+        FileExtractor fe(line);
         if(*line.begin() == '0' || *line.begin() == '1'){
-            std::string val;
-            if(line_stream >> val){
-                assert(Variable::var_map[val.substr(1)].get_num_nibbles() == 1);
-                Variable::var_map[val.substr(1)].add_timestamp(curr_timestamp, (*line.begin() == '0') ? "0" : "1");
+            extracted_string val = fe.extract_line();
+            if(val.has_value()){
+                std::string_view::const_iterator new_beg = val.value().begin();
+                new_beg = ++new_beg;
+                std::string_view vcd_name(&(*new_beg), std::distance(new_beg, val.value().end()));
+                auto it = Variable::var_map.find(vcd_name);
+
+                assert(it != Variable::var_map.end());
+                assert(it->second.get_num_nibbles() == 1);
+
+                it->second.add_timestamp(curr_timestamp, (*line.begin() == '0') ? "0" : "1");
             }else{
                 throw std::runtime_error("Expected one token in line...");
             }
         }else if(*line.begin() == 'b'){
-            std::string value, name;
-            if(line_stream >> value >> name){
-                assert(Variable::var_map.contains(name));
-                Variable::var_map[name].add_timestamp(curr_timestamp, Variable::binary_to_hex(value.substr(1), Variable::var_map[name].get_num_nibbles()));
-            }else{
-                throw std::runtime_error("Expected two tokens in line...");
-            }
+        //     extracted_string value = fe.extract_line();
+        //     extracted_string name = fe.extract_line();
+        //     if(value.has_value() && name.has_value()){
+        //         auto it = Variable::var_map.find(name.value());
+        //         assert(it != Variable::var_map.end());
+        //
+        //         std::string_view::const_iterator new_beg = value.value().begin();
+        //         new_beg = ++new_beg;
+        //         value = std::string_view(&(*(new_beg)), std::distance(new_beg, value.value().end()));
+        //
+        //         it->second.add_timestamp(curr_timestamp, Variable::binary_to_hex(value.value(), it->second.get_num_nibbles()));
+        //
+        //     }else{
+        //         throw std::runtime_error("Expected two tokens in line...");
+        //     }
         }else if(*line.begin() == '#'){
             curr_timestamp = std::stoull(line.substr(1));
         }
