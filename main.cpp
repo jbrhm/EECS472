@@ -1,4 +1,5 @@
 #include <getopt.h>
+#include <queue>
 #include <numeric>
 #include <cassert>
 #include <format>
@@ -33,17 +34,32 @@ private:
 public:
     static std::unordered_map<std::string, Variable> var_map; // map from vcd
     static std::unordered_map<std::string, std::string> rtl_to_vcd_names; // external names to internal names
+    static std::unordered_map<std::string, std::string> vcd_to_rtl_names; // external names to internal names
     
     static std::string binary_to_hex(std::string binary, std::size_t num_hex){
         char const* hex_lut = "0123456789ABCDEF";
         assert(std::strlen(hex_lut) == 16);
+        std::queue<std::size_t> x_indices{};
+        for(std::size_t i = 0; i < binary.length(); ++i){
+            if(binary[i] == 'x'){
+                binary[i] = '0';
+                std::size_t idx = binary.length() - i - 1;
+                x_indices.push(idx/4);
+            }
+        }
         std::size_t decimal = std::stoull(binary, nullptr, 2);
 
         std::string output{};
         // loop over the 16 nibbles in the std::size_t
         for(std::size_t i = 0; i < num_hex; ++i){
-            std::size_t mask = 0xFU << ((num_hex - i - 1) * 4);
-            output.push_back(hex_lut[(decimal & mask) >> ((num_hex - i - 1) * 4)]);
+            std::size_t idx = num_hex - i - 1;
+            if(!x_indices.empty() && x_indices.front() == idx){
+                output.push_back('x');
+                x_indices.pop();
+            }else{
+                std::size_t mask = 0xFU << (idx * 4);
+                output.push_back(hex_lut[(decimal & mask) >> (idx * 4)]);
+            }
         }
 
         return output;
@@ -88,6 +104,7 @@ public:
 };
 std::unordered_map<std::string, Variable> Variable::var_map{};
 std::unordered_map<std::string, std::string> Variable::rtl_to_vcd_names{};
+std::unordered_map<std::string, std::string> Variable::vcd_to_rtl_names{};
 
 char const* const shortopts = "v:h";
 
@@ -207,6 +224,7 @@ int main(int argc, char** argv){
 
                     Variable::var_map[vcd_name] = Variable(std::stoull(size));
                     Variable::rtl_to_vcd_names[rtl_name] = vcd_name;
+                    Variable::vcd_to_rtl_names[vcd_name] = rtl_name;
                 }else{
                     throw std::runtime_error("Expected four tokens in scope statement...");
                 }
@@ -259,6 +277,10 @@ int main(int argc, char** argv){
         }
     }
 
+    for(auto const& [n, v] : Variable::var_map){
+        std::cout << std::format("Variable: {} Size: {}\n", Variable::vcd_to_rtl_names[n], Variable::var_map[n].get_size());
+    }
+
     {
         std::string var{"stage_if_0.PC_reg"};
         std::size_t t = 0;
@@ -267,6 +289,11 @@ int main(int argc, char** argv){
     {
         std::string var{"stage_if_0.PC_reg"};
         std::size_t t = 150;
+        std::cout << std::format("{} @ {}: {}\n", var, t, Variable::var_map[Variable::rtl_to_vcd_names[var]].get_value(t).value);
+    }
+    {
+        std::string var{"stage_if_0.PC_reg"};
+        std::size_t t = 300;
         std::cout << std::format("{} @ {}: {}\n", var, t, Variable::var_map[Variable::rtl_to_vcd_names[var]].get_value(t).value);
     }
     {
