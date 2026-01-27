@@ -225,8 +225,6 @@ int main(int argc, char** argv){
 
                     rtl_name = module + rtl_name;
 
-                    std::cout << std::format("Type: {} Size: {} VCD Name: {} RTL Name: {}\n", type, size, vcd_name, rtl_name);
-
                     Variable::var_map[vcd_name] = Variable(std::stoull(size));
                     Variable::rtl_to_vcd_names[rtl_name] = vcd_name;
                     Variable::vcd_to_rtl_names[vcd_name] = rtl_name;
@@ -283,7 +281,7 @@ int main(int argc, char** argv){
     }
 
     for(auto const& [n, v] : Variable::var_map){
-        std::cout << std::format("Variable: {} Size: {}\n", Variable::vcd_to_rtl_names[n], Variable::var_map[n].get_size());
+        // std::cout << std::format("Variable: {} Size: {}\n", Variable::vcd_to_rtl_names[n], Variable::var_map[n].get_size());
     }
 
     std::string var{"testbench.verisimpleV.data_hazard"};
@@ -293,7 +291,8 @@ int main(int argc, char** argv){
         if(v == "1"){
             ++total_data_hazards;
         }
-        std::cout << std::format("Variable: {} Time: {} Data: {}\n", var, i, v);
+        // std::cout << std::format("Variable: {} Time: {} Data: {}\n", var, i, v);
     }
-    std::cout << std::format("Found {} data hazards\n", total_data_hazards);
+
+    std::cout << std::format("{}\n", total_data_hazards);
 }
