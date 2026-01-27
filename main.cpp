@@ -2,6 +2,7 @@
 #include <queue>
 #include <numeric>
 #include <cassert>
+#include <optional>
 #include <iostream>
 #include <fstream>
 #include <regex>
@@ -69,6 +70,22 @@ public:
         return output;
     }
 
+    static std::optional<std::size_t> get_clock_period(std::string const& clock_signal){
+        if(Variable::rtl_to_vcd_names.contains(clock_signal) && Variable::var_map.contains(Variable::rtl_to_vcd_names[clock_signal])){
+            Variable const& v = Variable::var_map[Variable::rtl_to_vcd_names[clock_signal]];
+            std::size_t idx = v.get_num_timestamps() / 2;
+            if(idx < v.get_num_timestamps() && (idx + 1) < v.get_num_timestamps()){
+                assert(v.value[idx + 1].value != v.value[idx].value);
+                return 2 * (v.value[idx + 1].time - v.value[idx].time);
+            }else{
+                std::cout << "Failed to detect clock period\n";
+                return std::nullopt;
+            }
+        }else{
+            throw std::runtime_error("Clock signal not defined...");
+        }
+    }
+
     Variable() = default;
     Variable(std::size_t bits_in) : value{}, num_nibbles{static_cast<std::size_t>(std::ceil(bits_in / 4.0f))}{
         std::string init_value{};
@@ -102,25 +119,30 @@ public:
         return value[i];
     }
 
-    [[nodiscard]] std::size_t get_size() const{
+    [[nodiscard]] std::size_t get_num_nibbles() const{
         return num_nibbles;
+    }
+
+    [[nodiscard]] std::size_t get_num_timestamps() const{
+        return value.size();
     }
 };
 std::unordered_map<std::string, Variable> Variable::var_map{};
 std::unordered_map<std::string, std::string> Variable::rtl_to_vcd_names{};
 std::unordered_map<std::string, std::string> Variable::vcd_to_rtl_names{};
 
-char const* const shortopts = "v:h";
+char const* const shortopts = "v:hc:";
 
 int main(int argc, char** argv){
     std::ios_base::sync_with_stdio(false);
-    std::string_view file_name;
+    std::string file_name, clock_signal;
     while(true){
         int c;
         int idx;
         static struct option longopts[] = {
             {"vcd",     required_argument,  0, 'v'},
             {"help",    0,                  0, 'h'},
+            {"clock",   required_argument,  0, 'c'},
             {0,         0,                  0, 0}
         };
 
@@ -132,6 +154,9 @@ int main(int argc, char** argv){
         switch(c){
             case 'v':
                 file_name = optarg;
+                break;
+            case 'c':
+                clock_signal = optarg;
                 break;
             case 'h':
                 std::cout << "Usage: ./vcd-analysis [--help | --vcd=path/to/vcd/file]";
@@ -149,7 +174,7 @@ int main(int argc, char** argv){
         return 1;
     }
 
-    std::ifstream vcd_file(static_cast<std::string>(file_name), std::ios::in | std::ios::binary);
+    std::ifstream vcd_file(file_name, std::ios::in | std::ios::binary);
 
     if(!vcd_file.is_open()){
         std::cerr << "No such file\n";
@@ -249,6 +274,10 @@ int main(int argc, char** argv){
         }
     }
 
+    for(auto const& [v, _] : Variable::rtl_to_vcd_names){
+        std::cout << "Variable: " << v << '\n';
+    }
+
     // reset to the beginning
     vcd_file.clear();
     vcd_file.seekg(0, std::ios::beg);
@@ -261,7 +290,7 @@ int main(int argc, char** argv){
         if(*line.begin() == '0' || *line.begin() == '1'){
             std::string val;
             if(line_stream >> val){
-                assert(Variable::var_map[val.substr(1)].get_size() == 1);
+                assert(Variable::var_map[val.substr(1)].get_num_nibbles() == 1);
                 Variable::var_map[val.substr(1)].add_timestamp(curr_timestamp, (*line.begin() == '0') ? "0" : "1");
             }else{
                 throw std::runtime_error("Expected one token in line...");
@@ -270,7 +299,7 @@ int main(int argc, char** argv){
             std::string value, name;
             if(line_stream >> value >> name){
                 assert(Variable::var_map.contains(name));
-                Variable::var_map[name].add_timestamp(curr_timestamp, Variable::binary_to_hex(value.substr(1), Variable::var_map[name].get_size()));
+                Variable::var_map[name].add_timestamp(curr_timestamp, Variable::binary_to_hex(value.substr(1), Variable::var_map[name].get_num_nibbles()));
             }else{
                 throw std::runtime_error("Expected two tokens in line...");
             }
@@ -279,19 +308,54 @@ int main(int argc, char** argv){
         }
     }
 
-    for(auto const& [n, v] : Variable::var_map){
-        // std::cout << std::format("Variable: {} Size: {}\n", Variable::vcd_to_rtl_names[n], Variable::var_map[n].get_size());
+    // auto detect the clock period
+    std::size_t clock_period = 100;
+    std::optional<std::size_t> clock_period_opt = Variable::get_clock_period(clock_signal);
+    if(clock_period_opt.has_value()){
+        clock_period = clock_period_opt.value();
     }
 
+    // COUNT THE TOTAL DATA HAZARDS //
     std::string var{"testbench.verisimpleV.data_hazard"};
     std::size_t total_data_hazards = 0;
-    for(std::size_t i = 0; i < curr_timestamp; i += 150){
+    for(std::size_t i = 0; i < curr_timestamp; i += clock_period){
         std::string v = Variable::var_map[Variable::rtl_to_vcd_names[var]].get_value(i).value;
         if(v == "1"){
             ++total_data_hazards;
         }
-        // std::cout << std::format("Variable: {} Time: {} Data: {}\n", var, i, v);
     }
 
     std::cout << total_data_hazards <<'\n';
+    // COUNT THE TOTAL DATA HAZARDS //
+
+    // COUNT THE NUMBER OF FTBNT MISPREDICTED BRANCHES //
+    std::string cond_branch_name{"testbench.verisimpleV.john_mem_wb_cond_branch_dbg"};
+    std::string uncond_branch_name{"testbench.verisimpleV.john_mem_wb_uncond_branch_dbg"};
+    std::string valid_name{"testbench.verisimpleV.john_mem_wb_valid_dbg"};
+    std::string taken_name{"testbench.verisimpleV.john_mem_wb_take_branch_dbg"};
+    std::string PC_name{"testbench.verisimpleV.john_mem_wb_PC_dbg"};
+    std::string NPC_name{"testbench.verisimpleV.john_mem_wb_NPC_dbg"};
+
+    std::size_t total_branches = 0;
+    std::size_t correct_branches = 0;
+    for(std::size_t i = 0; i < curr_timestamp; i += clock_period){
+        std::string cond_branch = Variable::var_map[Variable::rtl_to_vcd_names[cond_branch_name]].get_value(i).value;
+        std::string uncond_branch = Variable::var_map[Variable::rtl_to_vcd_names[uncond_branch_name]].get_value(i).value;
+        std::string valid = Variable::var_map[Variable::rtl_to_vcd_names[valid_name]].get_value(i).value;
+        std::string taken = Variable::var_map[Variable::rtl_to_vcd_names[taken_name]].get_value(i).value;
+        std::string PC = Variable::var_map[Variable::rtl_to_vcd_names[PC_name]].get_value(i).value;
+        std::string NPC = Variable::var_map[Variable::rtl_to_vcd_names[NPC_name]].get_value(i).value;
+
+        if(valid == "1" && (cond_branch == "1" || uncond_branch == "1")){
+            ++total_branches;
+            std::size_t PC_val = std::stoull(PC, nullptr, 16);
+            std::size_t NPC_val = std::stoull(NPC, nullptr, 16);
+            if((NPC_val < PC_val && taken == "1") || (NPC_val > PC_val && taken == "0")){
+                ++correct_branches;
+            }
+        }
+    }
+
+    std::cout << total_branches << " " << static_cast<double>(correct_branches) / total_branches <<'\n';
+    // COUNT THE NUMBER OF FTBNT MISPREDICTED BRANCHES //
 }
