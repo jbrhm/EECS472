@@ -274,9 +274,9 @@ int main(int argc, char** argv){
         }
     }
 
-    for(auto const& [v, _] : Variable::rtl_to_vcd_names){
-        std::cout << "Variable: " << v << '\n';
-    }
+    // for(auto const& [v, _] : Variable::rtl_to_vcd_names){
+    //     std::cout << "Variable: " << v << '\n';
+    // }
 
     // reset to the beginning
     vcd_file.clear();

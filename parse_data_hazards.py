@@ -6,16 +6,18 @@ branch_acc = []
 with open('output', 'r') as file: 
     for i, line in enumerate(file):
         try:
-            curr = int(line.strip())
             if i % 2 == 0:
-                l.append(curr)
+                curr = int(line.strip())
+                data_hazards.append(curr)
             else:
+                curr = float(line.strip())
+                branch_acc.append(curr)
         except:
             pass
 
 fig, ax = plt.subplots()
 
-ax.hist(l, bins=10)
+ax.hist(data_hazards, bins=10)
 
 # Add labels and a title
 ax.set_xlabel("# of Data Hazards")
