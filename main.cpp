@@ -2,7 +2,6 @@
 #include <queue>
 #include <numeric>
 #include <cassert>
-#include <format>
 #include <iostream>
 #include <fstream>
 #include <regex>
@@ -294,5 +293,5 @@ int main(int argc, char** argv){
         // std::cout << std::format("Variable: {} Time: {} Data: {}\n", var, i, v);
     }
 
-    std::cout << std::format("{}\n", total_data_hazards);
+    std::cout << total_data_hazards <<'\n';
 }
