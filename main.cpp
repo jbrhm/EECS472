@@ -39,26 +39,31 @@ public:
     static std::string binary_to_hex(std::string binary, std::size_t num_hex){
         char const* hex_lut = "0123456789ABCDEF";
         assert(std::strlen(hex_lut) == 16);
-        std::queue<std::size_t> x_indices{};
-        for(std::size_t i = 0; i < binary.length(); ++i){
-            if(binary[i] == 'x'){
-                binary[i] = '0';
-                std::size_t idx = binary.length() - i - 1;
-                x_indices.push(idx/4);
-            }
-        }
-        std::size_t decimal = std::stoull(binary, nullptr, 2);
 
         std::string output{};
-        // loop over the 16 nibbles in the std::size_t
-        for(std::size_t i = 0; i < num_hex; ++i){
-            std::size_t idx = num_hex - i - 1;
-            if(!x_indices.empty() && x_indices.front() == idx){
+        // handle the case where the size is not a multiple of four
+        if(binary.length() % 4){
+            try{
+                std::string bin = binary.substr(0, binary.length() % 4);
+                std::size_t decimal = std::stoull(bin, nullptr, 2);
+                // assert(decimal < std::strlen(hex_lut));
+                output.push_back(hex_lut[decimal]);
+            }catch(std::out_of_range const& e){
                 output.push_back('x');
-                x_indices.pop();
-            }else{
-                std::size_t mask = 0xFU << (idx * 4);
-                output.push_back(hex_lut[(decimal & mask) >> (idx * 4)]);
+            }catch(std::invalid_argument const& e){
+                output.push_back('x');
+            }
+        }
+        for(std::size_t i = binary.length() % 4; (i + 4) <= binary.length(); i += 4){
+            try{
+                std::string bin = binary.substr(i, 4);
+                std::size_t decimal = std::stoull(bin, nullptr, 2);
+                // assert(decimal < std::strlen(hex_lut));
+                output.push_back(hex_lut[decimal]);
+            }catch(std::out_of_range const& e){
+                output.push_back('x');
+            }catch(std::invalid_argument const& e){
+                output.push_back('x');
             }
         }
 
@@ -281,24 +286,14 @@ int main(int argc, char** argv){
         std::cout << std::format("Variable: {} Size: {}\n", Variable::vcd_to_rtl_names[n], Variable::var_map[n].get_size());
     }
 
-    {
-        std::string var{"stage_if_0.PC_reg"};
-        std::size_t t = 0;
-        std::cout << std::format("{} @ {}: {}\n", var, t, Variable::var_map[Variable::rtl_to_vcd_names[var]].get_value(t).value);
+    std::string var{"testbench.verisimpleV.data_hazard"};
+    std::size_t total_data_hazards = 0;
+    for(std::size_t i = 0; i < curr_timestamp; i += 150){
+        std::string v = Variable::var_map[Variable::rtl_to_vcd_names[var]].get_value(i).value;
+        if(v == "1"){
+            ++total_data_hazards;
+        }
+        std::cout << std::format("Variable: {} Time: {} Data: {}\n", var, i, v);
     }
-    {
-        std::string var{"stage_if_0.PC_reg"};
-        std::size_t t = 150;
-        std::cout << std::format("{} @ {}: {}\n", var, t, Variable::var_map[Variable::rtl_to_vcd_names[var]].get_value(t).value);
-    }
-    {
-        std::string var{"stage_if_0.PC_reg"};
-        std::size_t t = 300;
-        std::cout << std::format("{} @ {}: {}\n", var, t, Variable::var_map[Variable::rtl_to_vcd_names[var]].get_value(t).value);
-    }
-    {
-        std::string var{"stage_if_0.PC_reg"};
-        std::size_t t = 450;
-        std::cout << std::format("{} @ {}: {}\n", var, t, Variable::var_map[Variable::rtl_to_vcd_names[var]].get_value(t).value);
-    }
+    std::cout << std::format("Found {} data hazards\n", total_data_hazards);
 }
