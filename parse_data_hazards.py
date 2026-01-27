@@ -1,12 +1,15 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import os
-l = []
+data_hazards = []
+branch_acc = []
 with open('output', 'r') as file: 
-    for line in file:
+    for i, line in enumerate(file):
         try:
             curr = int(line.strip())
-            l.append(curr)
+            if i % 2 == 0:
+                l.append(curr)
+            else:
         except:
             pass
 

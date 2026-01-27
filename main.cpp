@@ -356,6 +356,6 @@ int main(int argc, char** argv){
         }
     }
 
-    std::cout << total_branches << " " << static_cast<double>(correct_branches) / total_branches <<'\n';
+    std::cout << static_cast<double>(correct_branches) / total_branches <<'\n';
     // COUNT THE NUMBER OF FTBNT MISPREDICTED BRANCHES //
 }
