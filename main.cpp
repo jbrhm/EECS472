@@ -9,44 +9,62 @@
 #include <cstdint>
 #include <sstream>
 #include <functional>
+#include <string>
+#include <cstring>
+#include <cmath>
 
-// Header
-typedef struct {
+struct VcdKeyword{
     std::string pattern;
     std::function<void(std::ifstream&)> callback;
-} VcdKeyword;
+};
 
-typedef struct{
-    int time;
+struct Timestamp{
+    std::size_t time;
     std::string value;
-} Timestamp;
+    Timestamp(std::size_t t, std::string v) : time{t}, value{std::move(v)}{};
+    ~Timestamp() = default;
+};
 
 class Variable{
 private:
-    std::string name;
     std::vector<Timestamp> value;
+    std::size_t num_nibbles;
 
 public:
+    static std::unordered_map<std::string, Variable> var_map; // map from vcd
+    static std::unordered_map<std::string, std::string> rtl_to_vcd_names; // external names to internal names
+    
+    static std::string binary_to_hex(std::string binary, std::size_t num_hex){
+        char const* hex_lut = "0123456789ABCDEF";
+        assert(std::strlen(hex_lut) == 16);
+        std::size_t decimal = std::stoull(binary, nullptr, 2);
+
+        std::string output{};
+        // loop over the 16 nibbles in the std::size_t
+        for(std::size_t i = 0; i < num_hex; ++i){
+            std::size_t mask = 0xFU << ((num_hex - i - 1) * 4);
+            output.push_back(hex_lut[(decimal & mask) >> ((num_hex - i - 1) * 4)]);
+        }
+
+        return output;
+    }
+
     Variable() = default;
-    Variable(std::string name_in, std::string value_in = "x") : name{std::move(name_in)}, value{}{
-        value.push_back(Timestamp{.time{}, .value{value_in}});
+    Variable(std::size_t bits_in) : value{}, num_nibbles{static_cast<std::size_t>(std::ceil(bits_in / 4.0f))}{
+        std::string init_value{};
+        for(std::size_t i = 0; i < num_nibbles; ++i){
+            init_value += "x";
+        }
+        value.emplace_back(0, init_value);
     }
     ~Variable() = default;
 
-    void add_timestamp(int time, std::string value_in){
-        value.push_back(Timestamp{.time=time, .value{value_in}});
+    void add_timestamp(std::size_t time_in, std::string value_in){
+        value.emplace_back(time_in, value_in);
     }
 
-    [[nodiscard]] std::string const& get_name() const{
-        return name;
-    }
-
-    [[nodiscard]] std::vector<Timestamp> const& get_value() const{
-        return value;
-    }
-
-    [[nodiscard]] Timestamp get_value(int time) const{
-        int i = 0;
+    [[nodiscard]] Timestamp const& get_value(std::size_t time) const{
+        std::size_t i = 0;
         bool found = false;
         for(; i < value.size(); ++i){
             Timestamp const& v = value[i];
@@ -63,10 +81,13 @@ public:
 
         return value[i];
     }
-};
 
-std::unordered_map<std::string, Variable> var_map; // map from vcd
-std::unordered_map<std::string, std::string> rtl_to_vcd_names; // external names to internal names
+    [[nodiscard]] std::size_t get_size() const{
+        return num_nibbles;
+    }
+};
+std::unordered_map<std::string, Variable> Variable::var_map{};
+std::unordered_map<std::string, std::string> Variable::rtl_to_vcd_names{};
 
 char const* const shortopts = "v:h";
 
@@ -183,6 +204,9 @@ int main(int argc, char** argv){
                     rtl_name = module + rtl_name;
 
                     std::cout << std::format("Type: {} Size: {} VCD Name: {} RTL Name: {}\n", type, size, vcd_name, rtl_name);
+
+                    Variable::var_map[vcd_name] = Variable(std::stoull(size));
+                    Variable::rtl_to_vcd_names[rtl_name] = vcd_name;
                 }else{
                     throw std::runtime_error("Expected four tokens in scope statement...");
                 }
@@ -195,6 +219,7 @@ int main(int argc, char** argv){
             }}}
     };
 
+    // create the tables with all of the variables
     std::string str{};
     while(vcd_file >> str){
         for(auto const& [pat, cb] : keywords){
@@ -202,5 +227,51 @@ int main(int argc, char** argv){
                 cb(vcd_file);
             }
         }
+    }
+
+    // reset to the beginning
+    vcd_file.clear();
+    vcd_file.seekg(0, std::ios::beg);
+
+    // parse all of the value changes
+    std::string line{};
+    std::size_t curr_timestamp = 0;
+    while(std::getline(vcd_file, line)){
+        std::stringstream line_stream(line);
+        if(*line.begin() == '0' || *line.begin() == '1'){
+            std::string val;
+            if(line_stream >> val){
+                assert(Variable::var_map[val.substr(1)].get_size() == 1);
+                Variable::var_map[val.substr(1)].add_timestamp(curr_timestamp, (*line.begin() == '0') ? "0" : "1");
+            }else{
+                throw std::runtime_error("Expected one token in line...");
+            }
+        }else if(*line.begin() == 'b'){
+            std::string value, name;
+            if(line_stream >> value >> name){
+                assert(Variable::var_map.contains(name));
+                Variable::var_map[name].add_timestamp(curr_timestamp, Variable::binary_to_hex(value.substr(1), Variable::var_map[name].get_size()));
+            }else{
+                throw std::runtime_error("Expected two tokens in line...");
+            }
+        }else if(*line.begin() == '#'){
+            curr_timestamp = std::stoull(line.substr(1));
+        }
+    }
+
+    {
+        std::string var{"stage_if_0.PC_reg"};
+        std::size_t t = 0;
+        std::cout << std::format("{} @ {}: {}\n", var, t, Variable::var_map[Variable::rtl_to_vcd_names[var]].get_value(t).value);
+    }
+    {
+        std::string var{"stage_if_0.PC_reg"};
+        std::size_t t = 150;
+        std::cout << std::format("{} @ {}: {}\n", var, t, Variable::var_map[Variable::rtl_to_vcd_names[var]].get_value(t).value);
+    }
+    {
+        std::string var{"stage_if_0.PC_reg"};
+        std::size_t t = 450;
+        std::cout << std::format("{} @ {}: {}\n", var, t, Variable::var_map[Variable::rtl_to_vcd_names[var]].get_value(t).value);
     }
 }
