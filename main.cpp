@@ -148,22 +148,18 @@ public:
     }
 
     [[nodiscard]] Timestamp const& get_value(std::size_t time) const{
-        std::size_t i = 0;
-        bool found = false;
-        for(; i < value.size(); ++i){
-            Timestamp const& v = value[i];
+        auto timestamp_less = [](std::size_t time, Timestamp const& ts){
+            return time < ts.time;
+        };
 
-            if(i + 1 < value.size() && value[i + 1].time > time){
-                found = true;
-                break;
-            }
+        auto it = std::upper_bound(value.begin(), value.end(), time, timestamp_less);
+        auto og = it;
+
+        if(it != value.begin() && (--it)->time <= time){
+            return *it;
         }
 
-        if(!found){
-            return value.back();
-        }
-
-        return value[i];
+        return *og;
     }
 
     [[nodiscard]] std::size_t get_num_nibbles() const{
@@ -350,21 +346,21 @@ int main(int argc, char** argv){
                 throw std::runtime_error("Expected one token in line...");
             }
         }else if(*line.begin() == 'b'){
-        //     extracted_string value = fe.extract_line();
-        //     extracted_string name = fe.extract_line();
-        //     if(value.has_value() && name.has_value()){
-        //         auto it = Variable::var_map.find(name.value());
-        //         assert(it != Variable::var_map.end());
-        //
-        //         std::string_view::const_iterator new_beg = value.value().begin();
-        //         new_beg = ++new_beg;
-        //         value = std::string_view(&(*(new_beg)), std::distance(new_beg, value.value().end()));
-        //
-        //         it->second.add_timestamp(curr_timestamp, Variable::binary_to_hex(value.value(), it->second.get_num_nibbles()));
-        //
-        //     }else{
-        //         throw std::runtime_error("Expected two tokens in line...");
-        //     }
+            extracted_string value = fe.extract_line();
+            extracted_string name = fe.extract_line();
+            if(value.has_value() && name.has_value()){
+                auto it = Variable::var_map.find(name.value());
+                assert(it != Variable::var_map.end());
+
+                std::string_view::const_iterator new_beg = value.value().begin();
+                new_beg = ++new_beg;
+                value = std::string_view(&(*(new_beg)), std::distance(new_beg, value.value().end()));
+
+                it->second.add_timestamp(curr_timestamp, Variable::binary_to_hex(value.value(), it->second.get_num_nibbles()));
+
+            }else{
+                throw std::runtime_error("Expected two tokens in line...");
+            }
         }else if(*line.begin() == '#'){
             curr_timestamp = std::stoull(line.substr(1));
         }
@@ -418,6 +414,60 @@ int main(int argc, char** argv){
         }
     }
 
-    std::cout << static_cast<double>(correct_branches) / total_branches <<'\n';
+    std::cout << ((!total_branches) ? 0 : static_cast<double>(correct_branches) / total_branches) <<'\n';
     // COUNT THE NUMBER OF FTBNT MISPREDICTED BRANCHES //
+
+    std::vector<std::vector<std::string>> basic;
+    std::string id_valid_name{"testbench.verisimpleV.id_ex_valid_dbg"};
+    std::string read_rs1_name{"testbench.verisimpleV.john_debug_read_rs1"};
+    std::string read_rs2_name{"testbench.verisimpleV.john_debug_read_rs2"};
+    std::string id_rs1_name{"testbench.verisimpleV.john_debug_id_rs1"};
+    std::string id_rs2_name{"testbench.verisimpleV.john_debug_id_rs2"};
+    std::string id_rd_name{"testbench.verisimpleV.john_debug_id_rd"};
+
+    std::vector<float> v{};
+    for(std::size_t i = 0; i < curr_timestamp; i += clock_period){
+        std::string id_valid = Variable::var_map[Variable::rtl_to_vcd_names[id_valid_name]].get_value(i).value;
+        std::string read_rs1 = Variable::var_map[Variable::rtl_to_vcd_names[read_rs1_name]].get_value(i).value;
+        std::string read_rs2 = Variable::var_map[Variable::rtl_to_vcd_names[read_rs2_name]].get_value(i).value;
+        std::string id_rs1 = Variable::var_map[Variable::rtl_to_vcd_names[id_rs1_name]].get_value(i).value;
+        std::string id_rs2 = Variable::var_map[Variable::rtl_to_vcd_names[id_rs2_name]].get_value(i).value;
+        std::string id_rd = Variable::var_map[Variable::rtl_to_vcd_names[id_rd_name]].get_value(i).value;
+        std::string cond_branch = Variable::var_map[Variable::rtl_to_vcd_names[cond_branch_name]].get_value(i).value;
+        std::string uncond_branch = Variable::var_map[Variable::rtl_to_vcd_names[uncond_branch_name]].get_value(i).value;
+
+        std::function<int(int)> lam = [&](int start) -> int{
+            int max = 1;
+            for(int i = 1; i < basic[start].size(); ++i){
+                for(int rr = start - 1; rr >= 0; --rr){
+                    if(basic[rr][0] == basic[start][i]){
+                        max = std::max(lam(rr) + 1, max);
+                        break;
+                    }
+                }
+            }
+
+            return max;
+        };
+        
+        if(cond_branch == "1" || uncond_branch == "1"){
+            int max = 0;
+            for(int r = basic.size() -1; r >= 0; --r){
+                max = std::max(lam(r), max);
+            }
+            v.push_back(basic.size() / static_cast<float>(max));
+            basic.clear();
+        }else{
+            std::vector<std::string> s{id_rd};
+            if(id_valid == "1" && read_rs1 == "1"){
+                s.push_back(id_rs1);
+            }
+            if(id_valid == "1" && read_rs2 == "1"){
+                s.push_back(id_rs2);
+            }
+            basic.push_back(s);
+        }
+    }
+
+    std::cout << std::accumulate(v.begin(), v.end(), 0.0f) / v.size() << '\n';
 }
